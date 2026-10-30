@@ -405,8 +405,46 @@ textarea.memo:read-only { opacity: .85; }
     if (tk) opt.headers.Authorization = "Bearer " + tk;
     return fetch("https://api.github.com/repos/" + REPO + path, opt);
   }
-  function fetchRemote(tk) {
-    return api("/contents/" + FILE + "?ref=main&t=" + Date.now(), { cache: "no-store" }, tk).then(function (r) {
+  function fetchRemote(tk) { return fetchFile(FILE, tk); }
+  function putFile(name, obj, sha, tk, msg) {
+    var body = { message: msg, content: btoa(unescape(encodeURIComponent(JSON.stringify(obj, null, 1)))), branch: "main" };
+    if (sha) body.sha = sha;
+    return api("/contents/" + name, { method: "PUT", body: JSON.stringify(body) }, tk).then(function (r) {
+      if (!r.ok) throw new Error(String(r.status));
+    });
+  }
+  function b64e(buf) { var a = new Uint8Array(buf), t = ""; for (var i = 0; i < a.length; i++) t += String.fromCharCode(a[i]); return btoa(t); }
+  function b64d(str) { var t = atob(str), a = new Uint8Array(t.length); for (var i = 0; i < t.length; i++) a[i] = t.charCodeAt(i); return a; }
+  function deriveKey(pin, salt) {
+    return crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]).then(function (k) {
+      return crypto.subtle.deriveKey({ name: "PBKDF2", salt: salt, iterations: 200000, hash: "SHA-256" }, k, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    });
+  }
+  function encryptTok(tk, pin) {
+    var salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    return deriveKey(pin, salt).then(function (key) { return crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, new TextEncoder().encode(tk)); })
+      .then(function (ct) { return { salt: b64e(salt), iv: b64e(iv), data: b64e(ct) }; });
+  }
+  function decryptTok(obj, pin) {
+    return deriveKey(pin, b64d(obj.salt)).then(function (key) { return crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(obj.iv) }, key, b64d(obj.data)); })
+      .then(function (pt) { return new TextDecoder().decode(pt); });
+  }
+  function offerPin() {
+    if (!unlocked) return;
+    var p1 = window.prompt("앞으로 쓸 비밀번호를 정해 주세요 (4자리 이상)\n건너뛰려면 취소를 누르세요");
+    if (!p1 || !p1.trim()) return;
+    p1 = p1.trim();
+    if (p1.length < 4) { toast("4자리 이상으로 정해 주세요"); return; }
+    var p2 = window.prompt("한 번 더 입력해 주세요");
+    if (p2 === null) return;
+    if (p2.trim() !== p1) { toast("두 번 입력한 비밀번호가 달라요"); return; }
+    encryptTok(token, p1).then(function (obj) {
+      return fetchFile("lock.json", token).then(function (x) { return putFile("lock.json", obj, x.sha, token, "비밀번호 설정"); });
+    }).then(function () { toast("비밀번호를 정했어요. 다른 기기에서도 이 비밀번호로 풀 수 있어요"); })
+      .catch(function () { toast("비밀번호를 저장하지 못했어요"); });
+  }
+  function fetchFile(name, tk) {
+    return api("/contents/" + name + "?ref=main&t=" + Date.now(), { cache: "no-store" }, tk).then(function (r) {
       if (r.status === 404) return { data: {}, sha: null };
       if (!r.ok) throw new Error(String(r.status));
       return r.json().then(function (j) {
@@ -476,8 +514,14 @@ textarea.memo:read-only { opacity: .85; }
       if (pendCount() && !window.confirm("저장하지 않은 변경이 사라집니다. 잠글까요?")) return;
       pending = {}; unlocked = false; token = ""; setTok(""); load(); return;
     }
-    var tk = window.prompt("저장 비밀번호를 입력해 주세요");
-    if (tk && tk.trim()) tryUnlock(tk.trim(), false);
+    var inp = window.prompt("비밀번호를 입력해 주세요\n(처음이라면 GitHub 토큰을 붙여 넣어 주세요)");
+    if (!inp || !inp.trim()) return;
+    inp = inp.trim();
+    if (/^(github_pat_|ghp_)/.test(inp)) { tryUnlock(inp, false).then(offerPin); return; }
+    fetchFile("lock.json", "").then(function (x) {
+      if (!x.sha) { toast("처음에는 GitHub 토큰으로 잠금을 풀어 주세요"); return; }
+      return decryptTok(x.data, inp).then(function (tk) { return tryUnlock(tk, false); }, function () { toast("비밀번호가 맞지 않아요"); });
+    }).catch(function () { toast("연결하지 못했어요. 잠시 뒤 다시 시도해 주세요"); });
   });
   document.getElementById("savebtn").addEventListener("click", save);
   document.getElementById("savecancel").addEventListener("click", function () { pending = {}; load(); });
