@@ -117,6 +117,15 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
   .stsel { margin: 0 14px 12px; justify-self: start; }
   h1 { font-size: 22px; }
 }
+.lockrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -4px 0 14px; font-size: 13px; color: var(--muted); }
+.lockbtn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); border-radius: 8px; padding: 5px 12px; font-size: 13px; }
+.lockbtn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.stsel:disabled { opacity: .85; cursor: default; }
+textarea.memo:read-only { opacity: .85; }
+#savebar { position: fixed; left: 0; right: 0; bottom: 0; display: none; align-items: center; justify-content: center; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--surface-2); border-top: 1px solid var(--line); font-size: 14px; z-index: 5; }
+#savebar button { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: 6px 16px; font-size: 14px; }
+#savebar #savebtn { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+#savebar button:disabled { opacity: .6; }
 </style>
 
 </head><body>
@@ -125,6 +134,7 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
     <h1>릴스 소재 보드</h1>
     <div class="tally" id="tally" aria-live="polite"></div>
   </header>
+  <div class="lockrow"><button id="lockbtn" class="lockbtn" type="button">수정 잠금 해제</button><span id="lockmsg">보기만 가능합니다</span></div>
 
   <section class="tools" aria-label="소재 찾기">
     <input type="search" id="q" placeholder="제목, 근거, 후킹, 원고에서 검색" autocomplete="off">
@@ -138,6 +148,7 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
 
   <main id="list"></main>
 </div>
+<div id="savebar" role="region" aria-label="저장"><span id="savecount"></span><button id="savebtn" type="button">저장</button><button id="savecancel" type="button">취소</button></div>
 <div id="toast" role="status"></div>
 
 <script src="./보드데이터.js"></script>
@@ -152,6 +163,7 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
   var open = {};
   var f = { q: "", cat: "", src: "", st: "", date: "" };
   var col = null;
+  var unlocked = false;
   var loaded = false;
 
   function el(tag, attrs, kids) {
@@ -268,6 +280,7 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
     var memoId = "memo-" + t.id;
     var ta = el("textarea", { class: "memo", id: memoId, "aria-label": "메모", placeholder: "메모" });
     ta.value = t.memo || "";
+    ta.readOnly = !unlocked;
     ta.addEventListener("blur", function () {
       if ((t.memo || "") === ta.value) return;
       write(t.id, { memo: ta.value });
@@ -277,8 +290,9 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
   }
 
   function write(id, data) {
+    if (!unlocked) { toast("수정하려면 먼저 잠금을 풀어 주세요"); return Promise.resolve(); }
     if (!col) return Promise.resolve();
-    return col.doc(id).update(data).catch(function () { toast("저장하지 못했어요. 다시 시도해 주세요"); });
+    return col.doc(id).update(data);
   }
 
   function matches(t) {
@@ -350,6 +364,7 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
         var sel = el("select", { class: "stsel", id: "st-" + t.id, "aria-label": "상태", "data-st": t.status || "new" });
         STATUS.forEach(function (s) { sel.appendChild(el("option", { value: s.v, text: s.t })); });
         sel.value = t.status || "new";
+        sel.disabled = !unlocked;
         sel.addEventListener("change", function () { sel.setAttribute("data-st", sel.value); write(t.id, { status: sel.value }); });
         card.appendChild(el("div", { class: "rowline" }, [main, sel]));
         if (isOpen) card.appendChild(buildDetail(t));
@@ -380,29 +395,107 @@ textarea.memo { width: 100%; min-height: 64px; border: 1px solid var(--line); bo
 
   render();
 
-  var KEY = "reelsBoard.local.v1";
-  function readOv() { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } }
-  function saveOv(o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { toast("이 브라우저에서는 상태를 저장하지 못해요"); } }
+  var REPO = "syna-orr/reels-board", FILE = "status.json", TK = "reelsBoard.token.v1";
+  var remote = {}, pending = {}, token = "";
+  function getTok() { try { return localStorage.getItem(TK) || ""; } catch (e) { return ""; } }
+  function setTok(v) { try { if (v) localStorage.setItem(TK, v); else localStorage.removeItem(TK); } catch (e) {} }
+  function api(path, opt, tk) {
+    opt = opt || {};
+    opt.headers = Object.assign({ Accept: "application/vnd.github+json" }, opt.headers || {});
+    if (tk) opt.headers.Authorization = "Bearer " + tk;
+    return fetch("https://api.github.com/repos/" + REPO + path, opt);
+  }
+  function fetchRemote(tk) {
+    return api("/contents/" + FILE + "?ref=main&t=" + Date.now(), { cache: "no-store" }, tk).then(function (r) {
+      if (r.status === 404) return { data: {}, sha: null };
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json().then(function (j) {
+        var txt = decodeURIComponent(escape(atob(j.content.replace(/\n/g, ""))));
+        return { data: JSON.parse(txt || "{}"), sha: j.sha };
+      });
+    });
+  }
+  function pendCount() { return Object.keys(pending).length; }
+  function renderBar() {
+    var n = pendCount();
+    document.getElementById("savebar").style.display = n ? "flex" : "none";
+    document.getElementById("savecount").textContent = "저장하지 않은 변경 " + n + "개";
+  }
+  function renderLock() {
+    var b = document.getElementById("lockbtn");
+    b.textContent = unlocked ? "다시 잠그기" : "수정 잠금 해제";
+    b.classList.toggle("on", unlocked);
+    document.getElementById("lockmsg").textContent = unlocked ? "상태와 메모를 바꾼 뒤 저장 버튼을 눌러 주세요" : "보기만 가능합니다";
+  }
   function load() {
-    var ov = readOv();
     docs = (window.REELS || []).map(function (t) {
       var o = Object.assign({}, t);
-      if (ov[t.id]) Object.assign(o, ov[t.id]);
+      if (remote[t.id]) Object.assign(o, remote[t.id]);
+      if (pending[t.id]) Object.assign(o, pending[t.id]);
       return o;
     });
-    renderDates(); render();
+    renderDates(); render(); renderLock(); renderBar();
   }
+  function tryUnlock(tk, silent) {
+    return api("", {}, tk).then(function (r) {
+      if (r.status === 401) throw new Error("bad");
+      return fetchRemote(tk);
+    }).then(function (x) {
+      token = tk; setTok(tk); unlocked = true; remote = x.data; load();
+      if (!silent) toast("잠금을 풀었어요");
+    }).catch(function (e) {
+      if (e && e.message === "bad") { setTok(""); toast("비밀번호가 맞지 않아요"); }
+      else if (!silent) toast("연결하지 못했어요. 잠시 뒤 다시 시도해 주세요");
+    });
+  }
+  function save() {
+    var btn = document.getElementById("savebtn");
+    btn.disabled = true;
+    var snap = JSON.parse(JSON.stringify(pending));
+    fetchRemote(token).then(function (x) {
+      var merged = x.data;
+      Object.keys(snap).forEach(function (id) { merged[id] = Object.assign(merged[id] || {}, snap[id]); });
+      var body = {
+        message: "상태 저장 " + new Date().toISOString().slice(0, 10),
+        content: btoa(unescape(encodeURIComponent(JSON.stringify(merged, null, 1)))),
+        branch: "main"
+      };
+      if (x.sha) body.sha = x.sha;
+      return api("/contents/" + FILE, { method: "PUT", body: JSON.stringify(body) }, token).then(function (r) {
+        if (!r.ok) throw new Error(String(r.status));
+        remote = merged; pending = {}; load(); toast("저장했어요");
+      });
+    }).catch(function (e) {
+      var c = e && e.message;
+      if (c === "401" || c === "403" || c === "404") toast("저장 권한이 없어요. 비밀번호를 다시 확인해 주세요");
+      else toast("저장하지 못했어요. 다시 시도해 주세요");
+    }).then(function () { btn.disabled = false; });
+  }
+  document.getElementById("lockbtn").addEventListener("click", function () {
+    if (unlocked) {
+      if (pendCount() && !window.confirm("저장하지 않은 변경이 사라집니다. 잠글까요?")) return;
+      pending = {}; unlocked = false; token = ""; setTok(""); load(); return;
+    }
+    var tk = window.prompt("저장 비밀번호를 입력해 주세요");
+    if (tk && tk.trim()) tryUnlock(tk.trim(), false);
+  });
+  document.getElementById("savebtn").addEventListener("click", save);
+  document.getElementById("savecancel").addEventListener("click", function () { pending = {}; load(); });
+
   loaded = true;
   col = {
     doc: function (id) {
       return { update: function (data) {
-        var ov = readOv(); ov[id] = Object.assign(ov[id] || {}, data); saveOv(ov);
+        pending[id] = Object.assign(pending[id] || {}, data);
         for (var i = 0; i < docs.length; i++) if (docs[i].id === id) Object.assign(docs[i], data);
-        render();
+        render(); renderBar();
         return Promise.resolve();
       } };
     }
   };
+  fetchRemote("").then(function (x) { remote = x.data; if (!pendCount()) load(); }).catch(function () {});
+  var saved = getTok();
+  if (saved) tryUnlock(saved, true);
   load();
 })();
 </script>
