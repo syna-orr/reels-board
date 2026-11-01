@@ -133,7 +133,7 @@ textarea.memo:read-only { opacity: .85; }
 .ideas-head .btn { margin-left: auto; white-space: nowrap; }
 #ideas-body { display: grid; gap: 12px; }
 #ideas-body[hidden] { display: none; }
-.idea-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.idea-actions { display: flex; justify-content: flex-end; }
 .hint { margin: 0; font-size: 12px; color: var(--muted); }
 .idea-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .idea { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg); display: grid; gap: 6px; }
@@ -156,7 +156,7 @@ textarea.memo:read-only { opacity: .85; }
     <div class="ideas-head"><h2 id="ideas-h">내 소재 아이디어</h2><span class="n" id="ideas-n"></span><button id="ideas-toggle" class="btn" type="button" aria-expanded="true" aria-controls="ideas-body">접기</button></div>
     <div id="ideas-body">
       <textarea id="idea-text" class="memo" aria-label="새 아이디어" placeholder="떠오른 소재를 적어 두세요. 예) 가게 메뉴판 사진을 AI로 깔끔하게 정리하는 법"></textarea>
-      <div class="idea-actions"><div class="fgroup" id="idea-cat"><span class="lab">분야</span></div><button id="idea-add" class="btn primary" type="button">아이디어 저장</button></div>
+      <div class="idea-actions"><button id="idea-add" class="btn primary" type="button">아이디어 저장</button></div>
       <p class="hint" id="idea-hint"></p>
       <ul id="idea-list" class="idea-list"></ul>
     </div>
@@ -552,10 +552,8 @@ textarea.memo:read-only { opacity: .85; }
   document.getElementById("savebtn").addEventListener("click", save);
   document.getElementById("savecancel").addEventListener("click", function () { pending = {}; load(); });
 
-  var IF = "ideas.json", ideas = [], ideasState = "loading", ideaCat = "ai";
+  var IF = "ideas.json", ideas = [], ideasState = "loading";
   var DK = "reelsBoard.ideaDraft.v1", CK = "reelsBoard.ideasClosed.v1";
-  var ICATS = [{ v: "ai", t: "AI" }, { v: "web", t: "홈페이지" }, { v: "etc", t: "기타" }];
-  function icatText(c) { for (var i = 0; i < ICATS.length; i++) if (ICATS[i].v === c) return ICATS[i].t; return "AI"; }
   function localDay(iso) {
     var d = new Date(iso); if (isNaN(d)) return "";
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
@@ -573,10 +571,7 @@ textarea.memo:read-only { opacity: .85; }
     if (ideasState === "error") { listEl.appendChild(el("li", { class: "hint", text: "아이디어를 불러오지 못했어요. 페이지를 다시 열어 주세요." })); return; }
     if (!items.length) { listEl.appendChild(el("li", { class: "hint", text: "아직 적어 둔 아이디어가 없어요." })); return; }
     items.forEach(function (it) {
-      var btns = el("div", { class: "ibtns" }, [cpBtn(it.text)]);
-      var req = el("button", { class: "cp", type: "button", text: "소재 정리 요청 복사" });
-      req.addEventListener("click", function () { copy("이 아이디어로 릴스 소재 정리해줘: " + it.text, req); });
-      btns.appendChild(req);
+      var btns = null;
       if (unlocked) {
         var dn = el("button", { class: "cp", type: "button", text: it.done ? "되돌리기" : "만들었어요" });
         dn.addEventListener("click", function () {
@@ -587,12 +582,11 @@ textarea.memo:read-only { opacity: .85; }
           if (!window.confirm("이 아이디어를 지울까요?")) return;
           changeIdeas(function (arr) { return arr.filter(function (x) { return x.id !== it.id; }); }, "지웠어요");
         });
-        btns.appendChild(dn); btns.appendChild(del);
+        btns = el("div", { class: "ibtns" }, [dn, del]);
       }
       var day = localDay(it.createdAt);
       listEl.appendChild(el("li", { class: "idea" + (it.done ? " done" : "") }, [
         el("div", { class: "imeta" }, [
-          el("span", { class: "tag " + (it.cat === "web" ? "web" : it.cat === "etc" ? "src" : "ai"), text: icatText(it.cat) }),
           el("span", { text: day ? dateLabel(day) : "" }),
           it.done ? el("span", { text: "· 만듦" }) : null
         ]),
@@ -611,15 +605,6 @@ textarea.memo:read-only { opacity: .85; }
     }).catch(function () { toast("저장하지 못했어요. 다시 시도해 주세요"); return false; });
   }
   (function setupIdeas() {
-    var g = document.getElementById("idea-cat");
-    ICATS.forEach(function (o) {
-      var b = el("button", { class: "chip", type: "button", text: o.t, "aria-pressed": String(ideaCat === o.v) });
-      b.addEventListener("click", function () {
-        ideaCat = o.v;
-        Array.prototype.forEach.call(g.querySelectorAll(".chip"), function (x, i) { x.setAttribute("aria-pressed", String(ICATS[i].v === o.v)); });
-      });
-      g.appendChild(b);
-    });
     var ta = document.getElementById("idea-text");
     try { ta.value = localStorage.getItem(DK) || ""; } catch (e) {}
     ta.addEventListener("input", function () { try { localStorage.setItem(DK, ta.value); } catch (e) {} });
@@ -627,7 +612,7 @@ textarea.memo:read-only { opacity: .85; }
       var text = ta.value.trim();
       if (!text) { toast("아이디어를 먼저 적어 주세요"); ta.focus(); return; }
       var btn = this; btn.disabled = true;
-      var item = { id: "idea-" + Date.now(), text: text, cat: ideaCat, createdAt: new Date().toISOString(), done: false };
+      var item = { id: "idea-" + Date.now(), text: text, createdAt: new Date().toISOString(), done: false };
       changeIdeas(function (arr) { arr.unshift(item); return arr; }, "아이디어를 저장했어요").then(function (ok) {
         if (ok) { ta.value = ""; try { localStorage.removeItem(DK); } catch (e) {} }
         btn.disabled = false;
