@@ -232,6 +232,7 @@ textarea.memo:read-only { opacity: 1; color: var(--sub); }
   var col = null;
   var unlocked = false;
   var loaded = false;
+  var dayLimit = 14; // 필터 없을 때 한 번에 보여줄 날짜 묶음 수
 
   function el(tag, attrs, kids) {
     var n = document.createElement(tag);
@@ -411,7 +412,10 @@ textarea.memo:read-only { opacity: 1; color: var(--sub); }
     var shown = docs.filter(matches);
     if (!shown.length) { host.appendChild(el("div", { class: "empty" }, [el("b", { text: "조건에 맞는 소재가 없어요" }), "검색어나 필터를 바꿔 보세요."])); return; }
     var byDate = {}; shown.forEach(function (t) { (byDate[t.date] = byDate[t.date] || []).push(t); });
-    Object.keys(byDate).sort().reverse().forEach(function (d) {
+    var noFilter = !f.q && !f.cat && !f.src && !f.st && !f.date;
+    var dateKeys = Object.keys(byDate).sort().reverse();
+    var visibleKeys = noFilter ? dateKeys.slice(0, dayLimit) : dateKeys;
+    visibleKeys.forEach(function (d) {
       var g = el("section", { class: "daygroup" });
       g.appendChild(el("div", { class: "dayhead" }, [el("h2", { text: dateLabel(d) }), el("span", { class: "n", text: d + " · " + byDate[d].length + "개" })]));
       byDate[d].sort(function (a, b) { return a.num - b.num; }).forEach(function (t) {
@@ -439,6 +443,13 @@ textarea.memo:read-only { opacity: 1; color: var(--sub); }
       });
       host.appendChild(g);
     });
+    if (noFilter && dateKeys.length > visibleKeys.length) {
+      var more = el("button", { class: "btn", type: "button", text: "이전 소재 더 보기 (" + (dateKeys.length - visibleKeys.length) + "일 더 있음)" });
+      more.style.width = "100%";
+      more.style.margin = "4px 0 20px";
+      more.addEventListener("click", function () { dayLimit += 14; render(); });
+      host.appendChild(more);
+    }
     if (keepId) { var n = document.getElementById(keepId); if (n) { n.focus(); try { n.setSelectionRange(selStart, selEnd); } catch (e) {} } }
   }
 
