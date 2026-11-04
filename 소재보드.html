@@ -323,7 +323,7 @@ textarea.memo:read-only { opacity: 1; color: var(--sub); }
   function buildDetail(t) {
     var d = el("div", { class: "detail" });
     var top = el("div", { class: "toprow" });
-    var req = t.date + " " + t.num + "번 소재 더 자세히 조사해줘.\n\n" + fullText(t);
+    var req = t.date + " " + t.num + "번 소재 더 자세히 조사해줘.";
     var b1 = el("button", { class: "btn primary", type: "button", text: "자세히 조사 요청 복사" });
     b1.addEventListener("click", function () { copy(req, b1); });
     var b2 = el("button", { class: "btn", type: "button", text: "소재 내용만 복사" });
